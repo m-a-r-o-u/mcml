@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcml-cli"
+version = "0.1.0"
+description = "Scrape MCML people into a local SQLite DB and query them from the CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{ name = "mcml-cli contributors" }]
+dependencies = [
+  "requests>=2.31",
+  "beautifulsoup4>=4.12",
+  "typer>=0.12",
+  "rich>=13.7"
+]
+
+[project.scripts]
+mcml = "mcml_cli.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
