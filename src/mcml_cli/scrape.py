@@ -10,13 +10,19 @@ from bs4 import BeautifulSoup
 from .db import Person
 
 BASE = "https://mcml.ai"
+TEAM_ROOT = f"{BASE}/team/"
 
 SEED_PAGES = [
+    TEAM_ROOT,
     f"{BASE}/team/directors/",
     f"{BASE}/team/management/",
     f"{BASE}/team/researchgroups/",
     f"{BASE}/team/jrgs/",
     f"{BASE}/team/juniors/",
+    f"{BASE}/team/tbfs/",
+    f"{BASE}/team/strategyboard/",
+    f"{BASE}/team/advisoryboard/",
+    f"{BASE}/team/former/",
 ]
 
 # Common academic titles and honorifics that appear as separate lines.
@@ -44,9 +50,45 @@ def _abs_url(url: str) -> str:
     return BASE + "/" + url
 
 
+def _dedupe_preserve(urls: Iterable[str]) -> list[str]:
+    seen = set()
+    out: list[str] = []
+    for u in urls:
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out
+
+
+def _discover_team_pages() -> list[str]:
+    """Find team subpages from the main navigation."""
+    try:
+        html = fetch_html(TEAM_ROOT)
+    except Exception:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    urls: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href or href.startswith("#") or href.lower().startswith("mailto:"):
+            continue
+        abs_url = _abs_url(href)
+        if not abs_url.startswith(TEAM_ROOT):
+            continue
+        abs_url = abs_url.split("#", 1)[0].split("?", 1)[0].rstrip("/") + "/"
+        urls.append(abs_url)
+
+    # Always include the canonical list of expected team pages.
+    urls.extend(SEED_PAGES)
+
+    return _dedupe_preserve(urls)
+
+
 def _looks_like_name(s: str) -> bool:
     s = _clean_ws(s)
-    if not s or len(s) < 5:
+    if not s or len(s) < 3:
         return False
     # Avoid section headings.
     lowered = s.lower()
@@ -65,14 +107,13 @@ def _looks_like_name(s: str) -> bool:
     }
     if lowered in bad:
         return False
-    # Must have at least one space and at least one letter.
-    if " " not in s:
+    # Require at least two name-like tokens.
+    tokens = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'.-]*", s)
+    if len(tokens) < 2:
         return False
-    if not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", s):
+    if len(tokens) > 8:
         return False
-    # Heuristic: names are typically 2 to 5 tokens.
-    toks = s.split()
-    return 2 <= len(toks) <= 6
+    return True
 
 
 def _split_name(full_name: str) -> tuple[str, str]:
@@ -81,6 +122,19 @@ def _split_name(full_name: str) -> tuple[str, str]:
     if len(parts) == 1:
         return parts[0], ""
     return parts[0], " ".join(parts[1:])
+
+
+def _person_score(p: Person) -> int:
+    score = 0
+    if p.mcml_url:
+        score += 1
+        if p.mcml_url.startswith(BASE):
+            score += 1
+    if p.note:
+        score += 1
+    if p.role and p.role.lower() != "member":
+        score += 1
+    return score
 
 
 @dataclass
@@ -95,9 +149,18 @@ def fetch_html(url: str, timeout_s: int = 30) -> str:
     headers = {
         "User-Agent": "mcml-cli/0.1 (+https://mcml.ai/team/)"
     }
-    r = requests.get(url, headers=headers, timeout=timeout_s)
-    r.raise_for_status()
-    return r.text
+    try:
+        r = requests.get(url, headers=headers, timeout=timeout_s)
+        r.raise_for_status()
+        return r.text
+    except requests.RequestException:
+        # Retry with http if https failed (some proxies block HTTPS tunneling).
+        if url.startswith("https://"):
+            alt_url = "http://" + url[len("https://") :]
+            r = requests.get(alt_url, headers=headers, timeout=timeout_s)
+            r.raise_for_status()
+            return r.text
+        raise
 
 
 def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
@@ -109,7 +172,7 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
     candidates: list[_Candidate] = []
 
     # We iterate over elements in DOM order.
-    for el in soup.find_all(["h2", "h3", "h4", "p", "a"]):
+    for el in soup.find_all(["h1", "h2", "h3", "h4", "h5", "p", "a", "strong", "li", "span", "div", "td"]):
         tag = el.name or ""
         text = _clean_ws(el.get_text(" ", strip=True))
 
@@ -117,8 +180,8 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
             current_section = text
             continue
 
-        # Names are typically rendered as h3/h4 headings on these pages.
-        if tag in {"h3", "h4"} and _looks_like_name(text):
+        # Names can appear in various heading or inline tags across pages.
+        if tag in {"h1", "h2", "h3", "h4", "h5", "strong", "li", "span", "div", "td", "a", "p"} and _looks_like_name(text):
             full_name = text
 
             # Collect nearby text in the same container to infer role/note.
@@ -128,15 +191,15 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
 
             if container:
                 # Include text from following siblings inside the same container.
-                for sib in el.find_all_next(["p", "a", "h3", "h4"], limit=25):
+                for sib in el.find_all_next(["p", "a", "h3", "h4", "h5", "li", "span", "div"], limit=30):
                     if sib is el:
                         continue
-                    if sib.name in {"h3", "h4"} and sib.get_text(strip=True) != "":
+                    if sib.name in {"h1", "h2", "h3", "h4", "h5", "strong"} and sib.get_text(strip=True) != "":
                         # Stop when the next person starts.
                         sib_text = _clean_ws(sib.get_text(" ", strip=True))
                         if _looks_like_name(sib_text):
                             break
-                    if sib.name == "p":
+                    if sib.name in {"p", "li", "span", "div"}:
                         t = _clean_ws(sib.get_text(" ", strip=True))
                         if t:
                             block_texts.append(t)
@@ -212,7 +275,11 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
 
 
 def scrape_all(seed_pages: Optional[Iterable[str]] = None) -> list[Person]:
-    pages = list(seed_pages or SEED_PAGES)
+    base_pages = list(seed_pages) if seed_pages is not None else SEED_PAGES
+    discovered = _discover_team_pages()
+    pages = _dedupe_preserve(list(base_pages) + discovered)
+    if not pages:
+        pages = SEED_PAGES
     all_people: list[Person] = []
 
     for page in pages:
@@ -233,9 +300,21 @@ def scrape_all(seed_pages: Optional[Iterable[str]] = None) -> list[Person]:
             )
 
     # Further de-duplication across pages.
-    dedup = {}
+    by_exact = {}
     for p in all_people:
         key = (p.full_name.lower(), (p.mcml_url or "").lower(), p.role.lower())
-        dedup[key] = p
+        by_exact[key] = p
 
-    return list(dedup.values())
+    # Merge entries that refer to the same person (same normalized full name).
+    by_name: dict[str, Person] = {}
+    for p in by_exact.values():
+        name_key = _norm(p.full_name)
+        existing = by_name.get(name_key)
+        if existing is None:
+            by_name[name_key] = p
+            continue
+        # Prefer richer records (MCML link, note, role info).
+        if _person_score(p) > _person_score(existing):
+            by_name[name_key] = p
+
+    return list(by_name.values())
