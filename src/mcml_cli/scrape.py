@@ -40,6 +40,13 @@ def _clean_ws(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())
 
 
+def _norm(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _abs_url(url: str) -> str:
     if not url:
         return ""
