@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from .db import Person
 
 BASE = "https://mcml.ai"
+TEAM_ROOT = f"{BASE}/team/"
 
 SEED_PAGES = [
     f"{BASE}/team/directors/",
@@ -42,6 +43,39 @@ def _abs_url(url: str) -> str:
     if url.startswith("/"):
         return BASE + url
     return BASE + "/" + url
+
+
+def _dedupe_preserve(urls: Iterable[str]) -> list[str]:
+    seen = set()
+    out: list[str] = []
+    for u in urls:
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        out.append(u)
+    return out
+
+
+def _discover_team_pages() -> list[str]:
+    """Find team subpages from the main navigation."""
+    try:
+        html = fetch_html(TEAM_ROOT)
+    except Exception:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    urls: list[str] = []
+    for a in soup.find_all("a", href=True):
+        href = (a.get("href") or "").strip()
+        if not href or href.startswith("#") or href.lower().startswith("mailto:"):
+            continue
+        abs_url = _abs_url(href)
+        if not abs_url.startswith(TEAM_ROOT):
+            continue
+        abs_url = abs_url.split("#", 1)[0].split("?", 1)[0].rstrip("/") + "/"
+        urls.append(abs_url)
+
+    return _dedupe_preserve(urls)
 
 
 def _looks_like_name(s: str) -> bool:
@@ -212,7 +246,11 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
 
 
 def scrape_all(seed_pages: Optional[Iterable[str]] = None) -> list[Person]:
-    pages = list(seed_pages or SEED_PAGES)
+    base_pages = list(seed_pages) if seed_pages is not None else SEED_PAGES
+    discovered = _discover_team_pages()
+    pages = _dedupe_preserve(list(base_pages) + discovered)
+    if not pages:
+        pages = SEED_PAGES
     all_people: list[Person] = []
 
     for page in pages:

@@ -58,7 +58,7 @@ def main(
         console.print(f"Database is empty. Run 'mcml export' first. DB: {default_db_path()}")
         raise typer.Exit(2)
 
-    matches = find_best_matches(query, rows, limit=limit)
+    matches = find_best_matches(query, rows, first=first, last=last, limit=limit)
     if not matches:
         console.print("No close matches found.")
         raise typer.Exit(1)
@@ -80,12 +80,16 @@ def export(
 
 @app.command()
 def check(
-    first: str = typer.Option(..., "--first", help="First name (exact or partial)."),
-    last: str = typer.Option(..., "--last", help="Last name (exact or partial)."),
+    first: Optional[str] = typer.Option(None, "--first", help="First name (exact or partial)."),
+    last: Optional[str] = typer.Option(None, "--last", help="Last name (exact or partial)."),
     db: Optional[Path] = typer.Option(None, "--db", help="Path to the SQLite DB (optional)."),
 ):
     """Return a simple yes/no and show top matches."""
-    query = f"{first} {last}".strip()
+    if not first and not last:
+        console.print("Please provide --first and/or --last.")
+        raise typer.Exit(2)
+
+    query = " ".join([p for p in [first, last] if p])
     con = connect(db)
     init_db(con)
     rows = [dict(r) for r in fetch_all(con)]
@@ -93,7 +97,7 @@ def check(
         console.print("Database is empty. Run 'mcml export' first.")
         raise typer.Exit(2)
 
-    matches = find_best_matches(query, rows, limit=5, threshold=0.55)
+    matches = find_best_matches(query, rows, first=first, last=last, limit=5, threshold=0.55)
     if matches and matches[0].score >= 0.85:
         console.print("Yes, likely an MCML member.")
     else:
