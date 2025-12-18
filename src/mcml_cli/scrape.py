@@ -13,11 +13,16 @@ BASE = "https://mcml.ai"
 TEAM_ROOT = f"{BASE}/team/"
 
 SEED_PAGES = [
+    TEAM_ROOT,
     f"{BASE}/team/directors/",
     f"{BASE}/team/management/",
     f"{BASE}/team/researchgroups/",
     f"{BASE}/team/jrgs/",
     f"{BASE}/team/juniors/",
+    f"{BASE}/team/tbfs/",
+    f"{BASE}/team/strategyboard/",
+    f"{BASE}/team/advisoryboard/",
+    f"{BASE}/team/former/",
 ]
 
 # Common academic titles and honorifics that appear as separate lines.
@@ -75,6 +80,9 @@ def _discover_team_pages() -> list[str]:
         abs_url = abs_url.split("#", 1)[0].split("?", 1)[0].rstrip("/") + "/"
         urls.append(abs_url)
 
+    # Always include the canonical list of expected team pages.
+    urls.extend(SEED_PAGES)
+
     return _dedupe_preserve(urls)
 
 
@@ -129,9 +137,18 @@ def fetch_html(url: str, timeout_s: int = 30) -> str:
     headers = {
         "User-Agent": "mcml-cli/0.1 (+https://mcml.ai/team/)"
     }
-    r = requests.get(url, headers=headers, timeout=timeout_s)
-    r.raise_for_status()
-    return r.text
+    try:
+        r = requests.get(url, headers=headers, timeout=timeout_s)
+        r.raise_for_status()
+        return r.text
+    except requests.RequestException:
+        # Retry with http if https failed (some proxies block HTTPS tunneling).
+        if url.startswith("https://"):
+            alt_url = "http://" + url[len("https://") :]
+            r = requests.get(alt_url, headers=headers, timeout=timeout_s)
+            r.raise_for_status()
+            return r.text
+        raise
 
 
 def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
@@ -143,7 +160,7 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
     candidates: list[_Candidate] = []
 
     # We iterate over elements in DOM order.
-    for el in soup.find_all(["h2", "h3", "h4", "p", "a"]):
+    for el in soup.find_all(["h2", "h3", "h4", "h5", "p", "a", "strong"]):
         tag = el.name or ""
         text = _clean_ws(el.get_text(" ", strip=True))
 
@@ -152,7 +169,7 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
             continue
 
         # Names are typically rendered as h3/h4 headings on these pages.
-        if tag in {"h3", "h4"} and _looks_like_name(text):
+        if tag in {"h3", "h4", "h5", "strong"} and _looks_like_name(text):
             full_name = text
 
             # Collect nearby text in the same container to infer role/note.
@@ -162,7 +179,7 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
 
             if container:
                 # Include text from following siblings inside the same container.
-                for sib in el.find_all_next(["p", "a", "h3", "h4"], limit=25):
+                for sib in el.find_all_next(["p", "a", "h3", "h4", "h5"], limit=25):
                     if sib is el:
                         continue
                     if sib.name in {"h3", "h4"} and sib.get_text(strip=True) != "":
