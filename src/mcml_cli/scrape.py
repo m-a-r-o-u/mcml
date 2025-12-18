@@ -88,7 +88,7 @@ def _discover_team_pages() -> list[str]:
 
 def _looks_like_name(s: str) -> bool:
     s = _clean_ws(s)
-    if not s or len(s) < 5:
+    if not s or len(s) < 3:
         return False
     # Avoid section headings.
     lowered = s.lower()
@@ -107,14 +107,13 @@ def _looks_like_name(s: str) -> bool:
     }
     if lowered in bad:
         return False
-    # Must have at least one space and at least one letter.
-    if " " not in s:
+    # Require at least two name-like tokens.
+    tokens = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'.-]*", s)
+    if len(tokens) < 2:
         return False
-    if not re.search(r"[A-Za-zÀ-ÖØ-öø-ÿ]", s):
+    if len(tokens) > 8:
         return False
-    # Heuristic: names are typically 2 to 5 tokens.
-    toks = s.split()
-    return 2 <= len(toks) <= 6
+    return True
 
 
 def _split_name(full_name: str) -> tuple[str, str]:
@@ -160,7 +159,7 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
     candidates: list[_Candidate] = []
 
     # We iterate over elements in DOM order.
-    for el in soup.find_all(["h2", "h3", "h4", "h5", "p", "a", "strong"]):
+    for el in soup.find_all(["h1", "h2", "h3", "h4", "h5", "p", "a", "strong", "li", "span", "div", "td"]):
         tag = el.name or ""
         text = _clean_ws(el.get_text(" ", strip=True))
 
@@ -168,8 +167,8 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
             current_section = text
             continue
 
-        # Names are typically rendered as h3/h4 headings on these pages.
-        if tag in {"h3", "h4", "h5", "strong"} and _looks_like_name(text):
+        # Names can appear in various heading or inline tags across pages.
+        if tag in {"h1", "h2", "h3", "h4", "h5", "strong", "li", "span", "div", "td", "a", "p"} and _looks_like_name(text):
             full_name = text
 
             # Collect nearby text in the same container to infer role/note.
@@ -179,15 +178,15 @@ def _extract_candidates_from_page(html: str, page_url: str) -> list[_Candidate]:
 
             if container:
                 # Include text from following siblings inside the same container.
-                for sib in el.find_all_next(["p", "a", "h3", "h4", "h5"], limit=25):
+                for sib in el.find_all_next(["p", "a", "h3", "h4", "h5", "li", "span", "div"], limit=30):
                     if sib is el:
                         continue
-                    if sib.name in {"h3", "h4"} and sib.get_text(strip=True) != "":
+                    if sib.name in {"h1", "h2", "h3", "h4", "h5", "strong"} and sib.get_text(strip=True) != "":
                         # Stop when the next person starts.
                         sib_text = _clean_ws(sib.get_text(" ", strip=True))
                         if _looks_like_name(sib_text):
                             break
-                    if sib.name == "p":
+                    if sib.name in {"p", "li", "span", "div"}:
                         t = _clean_ws(sib.get_text(" ", strip=True))
                         if t:
                             block_texts.append(t)
