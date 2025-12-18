@@ -124,6 +124,19 @@ def _split_name(full_name: str) -> tuple[str, str]:
     return parts[0], " ".join(parts[1:])
 
 
+def _person_score(p: Person) -> int:
+    score = 0
+    if p.mcml_url:
+        score += 1
+        if p.mcml_url.startswith(BASE):
+            score += 1
+    if p.note:
+        score += 1
+    if p.role and p.role.lower() != "member":
+        score += 1
+    return score
+
+
 @dataclass
 class _Candidate:
     full_name: str
@@ -287,9 +300,21 @@ def scrape_all(seed_pages: Optional[Iterable[str]] = None) -> list[Person]:
             )
 
     # Further de-duplication across pages.
-    dedup = {}
+    by_exact = {}
     for p in all_people:
         key = (p.full_name.lower(), (p.mcml_url or "").lower(), p.role.lower())
-        dedup[key] = p
+        by_exact[key] = p
 
-    return list(dedup.values())
+    # Merge entries that refer to the same person (same normalized full name).
+    by_name: dict[str, Person] = {}
+    for p in by_exact.values():
+        name_key = _norm(p.full_name)
+        existing = by_name.get(name_key)
+        if existing is None:
+            by_name[name_key] = p
+            continue
+        # Prefer richer records (MCML link, note, role info).
+        if _person_score(p) > _person_score(existing):
+            by_name[name_key] = p
+
+    return list(by_name.values())
